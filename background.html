@@ -1,0 +1,246 @@
+<!doctype html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" /> 
+		<script type="text/javascript" src="jquery-1.4.2.min.js"></script>
+		<script type="text/javascript">
+		// Setup
+		if(localStorage["authenticated"] == null) {
+			localStorage["menu"]						= "1111";
+			
+			localStorage["AskForCaption"] 	= "true";
+			localStorage["AskForTag"]			 	= "false";
+			localStorage["AddHostToCaption"]= "true";
+			localStorage["ClickThroughUrl"] = "false";
+			localStorage["SendToTwitter"] 	= "false";
+			
+			localStorage["authenticated"] 	= "false";
+			localStorage["email"] 					= "";
+			localStorage["password"] 				= "";
+			localStorage["group"] 					= "";
+	
+			chrome.tabs.create({url:"options.html",selected:true});
+		}
+
+		var GENERATOR	= "Picture To Tumblr Chrome Extension";
+		var kind_of_post = "published"; // Default value
+		
+		/* Save settings */
+		var Settings = {
+			authenticate : function(e,p,g,callback) {
+				$.ajax({
+					type	: 'POST',
+					url		: "http://www.tumblr.com/api/authenticate",
+					data	: {email:e, password:p},
+					error		: function(xhr,status){
+						Settings.reset();
+						
+						var code = {
+							403 : "Forbidden - Your email address or password were incorrect.",
+							400 : "Bad Request - There was at least one error while trying to save your post."
+						};
+						
+						callback({name:"error", text:code[xhr.status]});
+					},
+					success : function(data,status){
+						localStorage["authenticated"]	= "true";
+											
+						localStorage["email"]			= e;
+
+						localStorage["group"]			= g;
+
+						if(p != "") {
+							localStorage["password"]	= p;
+						}
+						
+						callback({name:"ok"});
+					}
+				});
+			},
+			reset : function() {
+				localStorage["authenticated"]	= "false";
+				localStorage["email"]			= "";
+				localStorage["password"]	= "";
+			},
+			isAuthenticated : function() {
+				return localStorage["authenticated"] == "true";
+			},
+			getPassword : function() {
+				return localStorage["password"];
+			},
+			getEmail : function() {
+				return localStorage["email"];
+			},
+			getGroup : function() {
+				return localStorage["group"];
+			}
+		}
+		
+		var Menu = {
+			getMenu : function() {
+				return localStorage["menu"];
+			},
+			getSize : function() {
+				var m = Menu.getMenu();
+				m = m.replace(/0/ig,"");
+				return m.length;
+			},
+			setMenu : function(menu) {
+				localStorage["menu"] = menu;
+				Menu.update();
+			},
+			isEnabled : function(index) {
+				var items = Menu.getMenu().split("");
+				return items[index] == "1";
+			},
+			isNowEnabled : function() {
+				return Menu.isEnabled(0);
+			},
+			isQueueEnabled : function() {
+				return Menu.isEnabled(1);
+			},
+			isDraftEnabled : function() {
+				return Menu.isEnabled(2);
+			},
+			isPrivateEnabled : function() {
+				return Menu.isEnabled(3);
+			},
+			create : function(index, title, kind) {
+				// Only create enabled menu
+				if(!Menu.isEnabled(index)) return;
+				
+				// If only 1 item enabled > different name
+				if(Menu.getSize() == 1) {
+					title = "Picture To Tumblr";
+				}
+				
+				chrome.contextMenus.create(
+					{
+						type		: "normal",
+						title 	: title,
+						contexts: ["image"],
+						onclick	: function(data, tab){
+							kind_of_post = kind;
+							chrome.tabs.getSelected(null,function(tab){
+								chrome.tabs.sendRequest(tab.id, {name: "parseAndSend", url:data.srcUrl}, function(response) {});
+							});
+						}
+					}
+				);
+			},
+			createAll : function() {
+				Menu.create(0, "Now", "published");
+				Menu.create(1, "Queue", "queue");
+				Menu.create(2, "Draft", "draft");
+				Menu.create(3, "Private", "private");
+			},
+			removeAll : function() {
+				chrome.contextMenus.removeAll(function(){});
+			},
+			update : function() {
+				Menu.removeAll();
+				Menu.createAll();
+			}
+		}
+		
+		var Options = {
+			set : function(key, val) {
+				localStorage[key] = val;
+				chrome.windows.getAll(null, function(windows){
+					for(var i = 0; i < windows.length; i++) {
+						chrome.tabs.getAllInWindow(windows[i].id,function(tabs){
+							for(var j = 0; j < tabs.length; j++) {
+								chrome.tabs.sendRequest(tabs[j].id, {name: "optionsHasChanged"}, function(response) {});
+							}
+						});
+					}
+				});
+			},
+			setAskForCaption : function(val) {
+				Options.set("AskForCaption", val);
+			},
+			setAskForTag : function(val) {
+				Options.set("AskForTag", val);
+			},
+			setAddHostToCaption : function(val) {
+				Options.set("AddHostToCaption", val);
+			},
+			setClickThroughUrl : function(val) {
+				Options.set("ClickThroughUrl", val);
+			},
+			setSendToTwitter : function(val) {
+				Options.set("SendToTwitter", val);
+			},
+			getAskForCaption : function() {
+				return localStorage["AskForCaption"] == "true";
+			},
+			getAskForTag : function() {
+				return localStorage["AskForTag"] == "true";
+			},
+			getAddHostToCaption : function() {
+				return localStorage["AddHostToCaption"] == "true";
+			},
+			getClickThroughUrl : function() {
+				return localStorage["ClickThroughUrl"] == "true";
+			},
+			getSendToTwitter : function() {
+				return localStorage["SendToTwitter"] == "true";
+			}
+		}
+		
+		/* Create menus */
+		Menu.createAll();
+
+		/* Listen to content script */
+		chrome.extension.onRequest.addListener(
+		  function(request, sender, sendResponse) {
+				if(request.name == "send") {
+					/* Prepare data to post */
+					var data = {
+						generator : GENERATOR,
+						email			: Settings.getEmail(),
+						password	: Settings.getPassword(),
+						type			: "photo",
+						source		: request.url,
+						caption		: request.caption,
+						tags			: request.tags,
+						private		: kind_of_post == "private" ? 1 : 0,
+						state			: kind_of_post == "private" ? "" : kind_of_post,
+						"send-to-twitter" : Options.getSendToTwitter() ? "auto" : "no",
+						"click-through-url" : request.clickThroughUrl
+					};
+					/* Post to a group if available */
+					if(Settings.getGroup() != "" && Settings.getGroup() != undefined) data["group"] = Settings.getGroup()+".tumblr.com";
+					
+					$.ajax({
+						type	: 'POST',
+						url		: "http://www.tumblr.com/api/write",
+						data	: data,
+						error		: function(xhr,status){
+							var code = {
+								403 : "Forbidden - Your email address or password were incorrect.",
+								400 : "Bad Request - There was at least one error while trying to save your post. (Maybe Tumblr API is busy!)"};
+							sendResponse({name:"post_error", status:code[xhr.status]});
+						},
+						success : function(data,status){
+							sendResponse({name:"post_picture_success"});
+						}
+					});
+				}
+				else if(request.name == "getOptions") {
+					sendResponse({
+						AskForCaption		: Options.getAskForCaption(),
+						ClickThroughUrl	: Options.getClickThroughUrl(),
+						SendToTwitter		: Options.getSendToTwitter(),
+						AskForTag				: Options.getAskForTag(),
+						AddHostToCaption: Options.getAddHostToCaption()
+					});
+				}
+			}
+		);
+		</script>
+		</head>
+	<body>
+		
+	</body>
+</html>
